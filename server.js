@@ -4,12 +4,14 @@ require('./config/env');
 const express = require('express');
 const http = require('http');
 const os = require('os');
+const path = require('path');
 const helmet = require('helmet');
 const mongoose = require('mongoose');
 
 const env = require('./config/env');
 const { connectDB, disconnectDB } = require('./config/db');
 const { connectRedis, quitRedis, isRedisReady } = require('./config/redis');
+const { initSocket } = require('./config/socket');
 const { startKeepAlive, stopKeepAlive } = require('./config/keepAlive');
 const { startSchedulers, stopSchedulers } = require('./schedulers');
 const { logger } = require('./utils/logger');
@@ -29,13 +31,15 @@ const START = Date.now();
 
 app.set('trust proxy', 1);
 
-app.use(helmet());
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(requestId);
 app.use(corsMiddleware);
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(requestLogger);
 app.use(ipRateLimit);
+
+app.use('/brand', express.static(path.join(__dirname, 'public', 'brand'), { maxAge: '7d' }));
 
 app.use(routes);
 
@@ -74,6 +78,7 @@ function printStatus() {
     `  ${pad('Memory')} ${Math.round(mem.rss / 1024 / 1024)} MB RSS · ${Math.round(mem.heapUsed / 1024 / 1024)} MB heap`,
     `  ${pad('MongoDB')} ${mongoUp ? ok(dbName()) : warn('down')}`,
     `  ${pad('Redis')} ${!env.REDIS_ENABLED ? off('disabled') : redisUp ? ok('connected') : warn('down')}`,
+    `  ${pad('Socket.io')} ${ok('enabled')}`,
     `  ${pad('Weather')} ${ok('open-meteo')} (default)`,
     `  ${pad('AI')} ${env.HDM_AI_ENABLED && env.HDM_AI_API_KEY ? ok('configured') : off('off')}`,
     `  ${pad('Email')} ${emailOn ? ok('configured') : off('off')}`,
@@ -82,6 +87,7 @@ function printStatus() {
     `  ${pad('Cloudinary')} ${env.CLOUDINARY_CLOUD_NAME ? ok('configured') : off('off')}`,
     `  ${pad('Keep-alive')} ${env.KEEP_ALIVE_ENABLED ? ok('every 10m') : off('off')}`,
     `  ${pad('Rate-limit')} ${env.REDIS_ENABLED ? ok(`${env.RATE_LIMIT_PER_IP_PER_MINUTE}/min per IP`) : off('off')}`,
+    `  ${pad('Routes')} /public · /admin · /app · /v1`,
     '',
   ];
 
@@ -102,6 +108,7 @@ async function boot() {
   }
 
   server = http.createServer(app);
+  initSocket(server);
 
   server.listen(PORT, async () => {
     printStatus();

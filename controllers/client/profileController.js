@@ -1,12 +1,46 @@
 const User = require('../../models/client/User');
-const emailService = require('../../services/emailService');
+const Tenant = require('../../models/admin/Tenant');
 const { successResponse, errorResponse } = require('../../utils/response');
 const asyncHandler = require('../../utils/asyncHandler');
+const emailService = require('../../services/emailService');
 
 const get = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user.id).select('fullName email phone role status emailVerifiedAt lastLoginAt createdAt').lean();
+  const user = await User.findById(req.user.id)
+    .select('fullName email phone role status emailVerifiedAt lastLoginAt createdAt tenantId')
+    .lean();
   if (!user) return errorResponse(res, 'User not found', 404);
-  return successResponse(res, { user });
+
+  const tenant = await Tenant.findById(user.tenantId)
+    .select('name slug status planCode billingInterval subscriptionStatus currentPeriodStart currentPeriodEnd')
+    .lean();
+
+  return successResponse(res, {
+    user: {
+      id: String(user._id),
+      fullName: user.fullName,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+      status: user.status,
+      emailVerifiedAt: user.emailVerifiedAt,
+      lastLoginAt: user.lastLoginAt,
+      createdAt: user.createdAt,
+      tenantId: String(user.tenantId),
+    },
+    tenant: tenant
+      ? {
+          id: String(tenant._id),
+          name: tenant.name,
+          slug: tenant.slug,
+          status: tenant.status,
+          planCode: tenant.planCode,
+          billingInterval: tenant.billingInterval,
+          subscriptionStatus: tenant.subscriptionStatus,
+          currentPeriodStart: tenant.currentPeriodStart,
+          currentPeriodEnd: tenant.currentPeriodEnd,
+        }
+      : null,
+  });
 });
 
 const update = asyncHandler(async (req, res) => {
@@ -18,6 +52,7 @@ const update = asyncHandler(async (req, res) => {
     .select('fullName email phone role status')
     .lean();
   if (!user) return errorResponse(res, 'User not found', 404);
+
   return successResponse(res, { user }, 'Profile updated');
 });
 
@@ -36,7 +71,7 @@ const changePassword = asyncHandler(async (req, res) => {
   await user.save();
 
   emailService.sendPasswordChanged({
-    tenantId: req.user.tenantId,
+    tenantId: user.tenantId,
     recipientId: user._id,
     to: user.email,
     fullName: user.fullName,

@@ -1,8 +1,10 @@
 const mpesaService = require('../../services/mpesaService');
 const invoiceService = require('../../services/invoiceService');
+const paymentNotifyService = require('../../services/paymentNotifyService');
 const Invoice = require('../../models/client/Invoice');
 const Payment = require('../../models/admin/Payment');
-const socketService = require('../../services/socketService');
+const Tenant = require('../../models/admin/Tenant');
+const User = require('../../models/client/User');
 const { logger } = require('../../utils/logger');
 
 const mpesaCallback = async (req, res) => {
@@ -13,6 +15,7 @@ const mpesaCallback = async (req, res) => {
       return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
     }
 
+    /* Idempotency — if this callback already processed, ack and exit */
     const existing = await Payment.findOne({ checkoutRequestId: parsed.checkoutRequestId });
     if (existing?.status === 'success') {
       return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
@@ -24,6 +27,7 @@ const mpesaCallback = async (req, res) => {
       return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
     }
 
+    /* Create payment row (idempotent) */
     if (!existing) {
       await Payment.create({
         tenantId: invoice.tenantId,
@@ -43,18 +47,31 @@ const mpesaCallback = async (req, res) => {
       });
     }
 
-    await invoiceService.markPaid({
+    /* Mark invoice paid + extend subscription */
+    const paidInvoice = await invoiceService.markPaid({
       invoiceId: invoice._id,
       method: 'mpesa_stk',
       reference: parsed.mpesaReceiptNumber,
       amountPaid: parsed.amount,
     });
 
-    socketService.emitToAdmin('payment:received', {
-      tenantId: String(invoice.tenantId),
-      invoiceNumber: invoice.invoiceNumber,
-      amount: parsed.amount,
-    });
+    /* Load related entities for notifications */
+    const [tenant, owner] = await Promise.all([
+      Tenant.findById(invoice.tenantId).lean(),
+      User.findOne({ tenantId: invoice.tenantId, role: 'owner' }).lean(),
+    ]);
+
+    /* Fire notifications — user email, admin emails, sockets */
+    await paymentNotifyService
+      .notifyPaymentReceived({
+        invoice: paidInvoice,
+        tenant,
+        owner,
+        paymentMethod: 'mpesa_stk',
+        paymentReference: parsed.mpesaReceiptNumber,
+        paidAt: paidInvoice.paidAt,
+      })
+      .catch((err) => logger.warn({ err: err.message }, 'payment notify failed'));
 
     return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
   } catch (err) {

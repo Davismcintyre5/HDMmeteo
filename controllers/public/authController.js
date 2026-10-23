@@ -1,6 +1,7 @@
 const Tenant = require('../../models/admin/Tenant');
 const User = require('../../models/client/User');
 const Plan = require('../../models/admin/Plan');
+const Admin = require('../../models/admin/Admin');
 const Verification = require('../../models/client/Verification');
 const RefreshToken = require('../../models/client/RefreshToken');
 const { generateToken, generateRefreshToken, verify } = require('../../utils/jwt');
@@ -27,6 +28,30 @@ async function issueTokens(user) {
     expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
   });
   return { accessToken, refreshToken: raw };
+}
+
+async function notifyAdminsPending({ tenant, owner }) {
+  try {
+    const admins = await Admin.find({ status: 'active', role: { $in: ['admin', 'super_admin'] } })
+      .select('email fullName')
+      .lean();
+
+    for (const admin of admins) {
+      emailService
+        .sendAdminNewPending({
+          to: admin.email,
+          businessName: tenant.name,
+          ownerName: owner.fullName,
+          ownerEmail: owner.email,
+          ownerPhone: owner.phone || null,
+          registeredAt: tenant.createdAt || new Date().toISOString(),
+          reviewUrl: `${env.ADMIN_URL}/pending/${tenant._id}`,
+        })
+        .catch((err) => logger.warn({ err: err.message, admin: admin.email }, 'admin pending email failed'));
+    }
+  } catch (err) {
+    logger.warn({ err: err.message }, 'admin pending lookup failed');
+  }
 }
 
 const register = asyncHandler(async (req, res) => {
@@ -75,45 +100,59 @@ const register = asyncHandler(async (req, res) => {
 
   const paymentLink = `${env.CLIENT_URL}/invoice/${invoice.invoiceNumber}`;
 
-  emailService.sendRegistrationReceived({
-    tenantId: tenant._id,
-    recipientId: user._id,
-    to: user.email,
-    name: user.fullName,
-    businessName: tenant.name,
-    planName: plan.name,
-    amount: invoice.total,
-    currency: invoice.currency,
-    dueDate: invoice.dueDate.toISOString(),
-    invoiceNumber: invoice.invoiceNumber,
-    paymentLink,
-  }).catch((err) => logger.warn({ err: err.message }, 'registration email failed'));
-
-  if (phone) {
-    smsService.sendRegistrationReceived({
+  // ── 1. Email the client ──
+  emailService
+    .sendRegistrationReceived({
       tenantId: tenant._id,
       recipientId: user._id,
-      to: phone,
+      to: user.email,
+      name: user.fullName,
       businessName: tenant.name,
+      planName: plan.name,
       amount: invoice.total,
       currency: invoice.currency,
-      dueDate: invoice.dueDate.toISOString().slice(0, 10),
-      shortUrl: paymentLink,
-    }).catch(() => {});
+      dueDate: invoice.dueDate.toISOString(),
+      invoiceNumber: invoice.invoiceNumber,
+      paymentLink,
+    })
+    .catch((err) => logger.warn({ err: err.message }, 'registration email failed'));
+
+  // ── 2. Email all active admins ──
+  notifyAdminsPending({ tenant, owner: user }).catch(() => {});
+
+  // ── 3. SMS the client ──
+  if (phone) {
+    smsService
+      .sendRegistrationReceived({
+        tenantId: tenant._id,
+        recipientId: user._id,
+        to: phone,
+        businessName: tenant.name,
+        amount: invoice.total,
+        currency: invoice.currency,
+        dueDate: invoice.dueDate.toISOString().slice(0, 10),
+        shortUrl: paymentLink,
+      })
+      .catch(() => {});
   }
 
-  return successResponse(res, {
-    tenant: { id: String(tenant._id), name: tenant.name, slug: tenant.slug, status: tenant.status },
-    user: { id: String(user._id), email: user.email },
-    invoice: {
-      invoiceNumber: invoice.invoiceNumber,
-      total: invoice.total,
-      currency: invoice.currency,
-      dueDate: invoice.dueDate,
-      paymentLink,
+  return successResponse(
+    res,
+    {
+      tenant: { id: String(tenant._id), name: tenant.name, slug: tenant.slug, status: tenant.status },
+      user: { id: String(user._id), email: user.email },
+      invoice: {
+        invoiceNumber: invoice.invoiceNumber,
+        total: invoice.total,
+        currency: invoice.currency,
+        dueDate: invoice.dueDate,
+        paymentLink,
+      },
+      paymentInstructions: instructions,
     },
-    paymentInstructions: instructions,
-  }, 'Registered', 201);
+    'Registered',
+    201
+  );
 });
 
 const login = asyncHandler(async (req, res) => {
@@ -133,11 +172,29 @@ const login = asyncHandler(async (req, res) => {
   const tokens = await issueTokens(user);
   const tenant = await Tenant.findById(user.tenantId).select('name slug status subscriptionStatus').lean();
 
-  return successResponse(res, {
-    ...tokens,
-    user: { id: String(user._id), email: user.email, fullName: user.fullName, role: user.role, tenantId: String(user.tenantId) },
-    tenant: tenant ? { id: String(tenant._id), name: tenant.name, slug: tenant.slug, status: tenant.status, subscriptionStatus: tenant.subscriptionStatus } : null,
-  }, 'Login successful');
+  return successResponse(
+    res,
+    {
+      ...tokens,
+      user: {
+        id: String(user._id),
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        tenantId: String(user.tenantId),
+      },
+      tenant: tenant
+        ? {
+            id: String(tenant._id),
+            name: tenant.name,
+            slug: tenant.slug,
+            status: tenant.status,
+            subscriptionStatus: tenant.subscriptionStatus,
+          }
+        : null,
+    },
+    'Login successful'
+  );
 });
 
 const refresh = asyncHandler(async (req, res) => {
@@ -147,7 +204,7 @@ const refresh = asyncHandler(async (req, res) => {
   let payload;
   try {
     payload = verify(refreshToken);
-  } catch (err) {
+  } catch {
     return errorResponse(res, 'Invalid refresh token', 401);
   }
   if (!payload.refresh) return errorResponse(res, 'Invalid refresh token', 401);
@@ -155,7 +212,7 @@ const refresh = asyncHandler(async (req, res) => {
   const doc = await RefreshToken.findOne({ hash: sha256(refreshToken), revokedAt: null });
   if (!doc || doc.expiresAt < new Date()) return errorResponse(res, 'Refresh token invalid or expired', 401);
 
-  const user = await User.findById(doc.userId).select('+password');
+  const user = await User.findById(doc.userId);
   if (!user || user.status !== 'active') return errorResponse(res, 'User inactive', 401);
 
   doc.revokedAt = new Date();
@@ -202,23 +259,27 @@ const forgotPassword = asyncHandler(async (req, res) => {
 
     const resetUrl = `${env.CLIENT_URL}/reset-password/${raw}`;
 
-    emailService.sendPasswordReset({
-      tenantId: user.tenantId,
-      recipientId: user._id,
-      to: user.email,
-      fullName: user.fullName,
-      resetUrl,
-      expiresIn: '1 hour',
-    }).catch(() => {});
-
-    if (user.phone) {
-      smsService.sendPasswordReset({
+    emailService
+      .sendPasswordReset({
         tenantId: user.tenantId,
         recipientId: user._id,
-        to: user.phone,
-        shortUrl: resetUrl,
-        expiresMin: 60,
-      }).catch(() => {});
+        to: user.email,
+        fullName: user.fullName,
+        resetUrl,
+        expiresIn: '1 hour',
+      })
+      .catch(() => {});
+
+    if (user.phone) {
+      smsService
+        .sendPasswordReset({
+          tenantId: user.tenantId,
+          recipientId: user._id,
+          to: user.phone,
+          shortUrl: resetUrl,
+          expiresMin: 60,
+        })
+        .catch(() => {});
     }
   }
 
@@ -245,4 +306,12 @@ const resetPassword = asyncHandler(async (req, res) => {
   return successResponse(res, { reset: true }, 'Password reset');
 });
 
-module.exports = { register, login, refresh, logout, verifyEmail, forgotPassword, resetPassword };
+module.exports = {
+  register,
+  login,
+  refresh,
+  logout,
+  verifyEmail,
+  forgotPassword,
+  resetPassword,
+};

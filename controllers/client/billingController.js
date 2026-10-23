@@ -3,16 +3,30 @@ const Tenant = require('../../models/admin/Tenant');
 const Plan = require('../../models/admin/Plan');
 const mpesaService = require('../../services/mpesaService');
 const invoiceService = require('../../services/invoiceService');
-const paymentInstructionsService = require('../../services/paymentInstructionsService');
 const { successResponse, errorResponse } = require('../../utils/response');
 const asyncHandler = require('../../utils/asyncHandler');
 const { parsePagination, buildMeta } = require('../../utils/pagination');
 const { logger } = require('../../utils/logger');
 
+function sanitizePhone(input) {
+  if (!input) return null;
+  const digits = String(input).replace(/\D/g, '');
+  if (digits.startsWith('254') && digits.length === 12) return digits;
+  if (digits.startsWith('0') && digits.length === 10) return `254${digits.slice(1)}`;
+  if (digits.length === 9 && (digits.startsWith('7') || digits.startsWith('1'))) return `254${digits}`;
+  return null;
+}
+
+function sanitizeAmount(input) {
+  const n = Math.round(Number(input));
+  if (!Number.isFinite(n) || n < 1) return null;
+  return n;
+}
+
 const currentInvoice = asyncHandler(async (req, res) => {
   const invoice = await Invoice.findOne({
     tenantId: req.user.tenantId,
-    status: { $in: ['sent', 'overdue'] },
+    status: { $in: ['sent', 'overdue', 'paid'] },
   }).sort({ createdAt: -1 }).lean();
 
   return successResponse(res, { invoice });
@@ -40,30 +54,37 @@ const invoiceByNumber = asyncHandler(async (req, res) => {
 });
 
 const stkPush = asyncHandler(async (req, res) => {
-  const { phone } = req.body;
-  if (!phone) return errorResponse(res, 'Phone number required', 400);
-  if (!mpesaService.enabled()) return errorResponse(res, 'M-Pesa not configured', 503);
+  const phone = sanitizePhone(req.body?.phone);
+  if (!phone) return errorResponse(res, 'Enter a valid Kenyan phone number', 400);
+  if (!mpesaService.enabled()) return errorResponse(res, 'M-Pesa is not configured', 503);
 
   const invoice = await Invoice.findOne({
     tenantId: req.user.tenantId,
     status: { $in: ['sent', 'overdue'] },
   }).sort({ createdAt: -1 });
+
   if (!invoice) return errorResponse(res, 'No open invoice', 400);
 
-  const normalized = String(phone).replace(/\D/g, '');
+  const amount = sanitizeAmount(invoice.amountDue);
+  if (!amount) return errorResponse(res, 'Invoice amount is invalid for M-Pesa (min KES 1)', 400);
 
   try {
     const result = await mpesaService.initiateStkPush({
-      phone: normalized,
-      amount: invoice.amountDue,
+      phone,
+      amount,
       accountReference: invoice.invoiceNumber,
       description: `HDM METEO ${invoice.invoiceNumber}`,
     });
 
+    if (result.ResponseCode !== '0') {
+      logger.warn({ invoiceId: invoice._id, responseCode: result.ResponseCode, responseDescription: result.ResponseDescription }, 'mpesa stk rejected');
+      return errorResponse(res, result.ResponseDescription || 'M-Pesa rejected the request', 502);
+    }
+
     invoice.stk = {
       checkoutRequestId: result.CheckoutRequestID || null,
       merchantRequestId: result.MerchantRequestID || null,
-      phone: normalized,
+      phone,
       initiatedAt: new Date(),
     };
     await invoice.save();
@@ -73,25 +94,27 @@ const stkPush = asyncHandler(async (req, res) => {
       customerMessage: result.CustomerMessage,
     }, 'STK push sent');
   } catch (err) {
-    logger.warn({ err: err.message, invoiceId: invoice._id }, 'stk push failed');
-    return errorResponse(res, 'Failed to send STK push', 502);
+    logger.warn({
+      err: err.message,
+      status: err.response?.status,
+      body: err.response?.data,
+      invoiceId: invoice._id,
+      phone,
+      amount,
+    }, 'stk push failed');
+    return errorResponse(res, err.response?.data?.errorMessage || 'Failed to send STK push', 502);
   }
 });
 
 const renew = asyncHandler(async (req, res) => {
   const tenant = await Tenant.findById(req.user.tenantId).lean();
   if (!tenant) return errorResponse(res, 'Tenant not found', 404);
-
   const plan = await Plan.findOne({ code: tenant.planCode }).lean();
   if (!plan) return errorResponse(res, 'Plan not found', 404);
 
   const owner = { fullName: req.user.fullName, email: req.user.email, phone: req.user.phone };
-
   const { invoice, instructions } = await invoiceService.generateSubscriptionInvoice({
-    tenantId: tenant._id,
-    owner,
-    tenant,
-    plan,
+    tenantId: tenant._id, owner, tenant, plan,
   });
 
   return successResponse(res, { invoice, instructions }, 'Renewal invoice created');
@@ -103,18 +126,14 @@ const upgrade = asyncHandler(async (req, res) => {
 
   const tenant = await Tenant.findById(req.user.tenantId).lean();
   if (!tenant) return errorResponse(res, 'Tenant not found', 404);
-  if (tenant.planCode === planCode) return errorResponse(res, 'Already on this plan', 400);
+  if (tenant.planCode === planCode) return errorResponse(res, 'You are already on this plan', 400);
 
   const plan = await Plan.findOne({ code: planCode, isActive: true, isPublic: true }).lean();
   if (!plan) return errorResponse(res, 'Plan not found', 404);
 
   const owner = { fullName: req.user.fullName, email: req.user.email, phone: req.user.phone };
-
   const { invoice, instructions } = await invoiceService.generateSubscriptionInvoice({
-    tenantId: tenant._id,
-    owner,
-    tenant,
-    plan,
+    tenantId: tenant._id, owner, tenant, plan,
   });
 
   return successResponse(res, { invoice, instructions }, 'Upgrade invoice created');
