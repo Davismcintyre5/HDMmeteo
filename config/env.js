@@ -74,6 +74,7 @@ const env = {
   MPESA_TRANSACTION_TYPE: process.env.MPESA_TRANSACTION_TYPE || 'CustomerBuyGoodsOnline',
 
   HDM_BRIDGE_ENABLED: bool(process.env.HDM_BRIDGE_ENABLED, false),
+  HDM_BRIDGE_SMS_ENABLED: bool(process.env.HDM_BRIDGE_SMS_ENABLED, false),
   HDM_API_KEY: process.env.HDM_API_KEY || '',
   HDM_API_URL: process.env.HDM_API_URL || 'https://bridgeapi.hdm.co.ke/api',
   HDM_FROM_EMAIL: process.env.HDM_FROM_EMAIL || '',
