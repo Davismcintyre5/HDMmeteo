@@ -1,36 +1,26 @@
 {
-  "name": "hdm-meteo",
+  "name": "hdm-meteo-api",
   "version": "1.0.0",
   "private": true,
-  "description": "HDM METEO — Weather API. One key. Every forecast.",
-  "author": {
-    "name": "Davis Okoth",
-    "email": "davis@hdm.co.ke",
-    "url": "https://hdm.co.ke"
-  },
-  "contributors": [
-    {
-      "name": "HDM",
-      "url": "https://hdm.co.ke"
-    }
-  ],
-  "license": "UNLICENSED",
+  "description": "HDM METEO — Weather API",
   "main": "server.js",
   "engines": {
     "node": ">=20.0.0",
     "npm": ">=10.0.0"
   },
   "scripts": {
-    "dev": "nodemon",
+    "install:client": "npm --prefix client install",
+    "install:all": "npm install && npm --prefix client install",
+    "build": "npm --prefix client run build",
+    "dev": "nodemon server.js",
     "start": "node server.js",
-    "dns": "node scripts/dnsset.js",
-    "dns:dry": "node scripts/dnsset.js --dry-run",
+    "seed": "node scripts/seed.js",
     "admin": "node scripts/admin.js",
-    "seed": "node scripts/seed.js"
+    "dns": "node scripts/dnsSet.js"
   },
   "dependencies": {
     "axios": "^1.7.2",
-    "bcrypt": "^5.1.1",
+    "bcryptjs": "^2.4.3",
     "cloudinary": "^2.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
@@ -44,10 +34,20 @@
     "pino-pretty": "^11.2.1",
     "rate-limiter-flexible": "^5.0.3",
     "socket.io": "^4.7.5",
-    "uuid": "^10.0.0",
-    "zod": "^3.23.8"
+    "uuid": "^10.0.0"
   },
   "devDependencies": {
+    "concurrently": "^8.2.2",
     "nodemon": "^3.1.4"
-  }
+  },
+  "author": {
+    "name": "Davis Okoth",
+    "email": "davis@hdm.co.ke",
+    "url": "https://hdm.co.ke"
+  },
+  "contributors": [
+    { "name": "HDM", "url": "https://hdm.co.ke" }
+  ],
+  "license": "UNLICENSED",
+  "keywords": ["hdm", "meteo", "weather", "api", "nairobi", "kenya"]
 }

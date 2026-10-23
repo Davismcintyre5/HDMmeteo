@@ -14,7 +14,9 @@ async function extractUser(req) {
     .select('tenantId status role fullName email phone')
     .lean();
 
-  if (!user || user.status !== 'active') throw ApiError.unauthorized('USER_INACTIVE', 'User inactive');
+  if (!user || user.status !== 'active') {
+    throw ApiError.unauthorized('USER_INACTIVE', 'User inactive');
+  }
 
   return {
     id: String(user._id),

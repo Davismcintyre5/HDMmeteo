@@ -5,6 +5,7 @@ const express = require('express');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const fs = require('fs');
 const helmet = require('helmet');
 const mongoose = require('mongoose');
 
@@ -24,14 +25,36 @@ const notFound = require('./middleware/global/notFound');
 const errorHandler = require('./middleware/global/errorHandler');
 
 const routes = require('./routes');
+const weatherRoutes = require('./routes/client/weather');
 
 const app = express();
 const PORT = env.PORT;
-const START = Date.now();
+
+const CLIENT_DIST = path.join(__dirname, 'client', 'dist');
+const CLIENT_INDEX = path.join(CLIENT_DIST, 'index.html');
+const HAS_CLIENT_BUILD = fs.existsSync(CLIENT_INDEX);
 
 app.set('trust proxy', 1);
 
-app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        imgSrc: ["'self'", 'data:', 'https:'],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        connectSrc: ["'self'", 'ws:', 'wss:'],
+        fontSrc: ["'self'", 'data:'],
+        objectSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+      },
+    },
+  })
+);
 app.use(requestId);
 app.use(corsMiddleware);
 app.use(express.json({ limit: '1mb' }));
@@ -39,9 +62,41 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(requestLogger);
 app.use(ipRateLimit);
 
+/* ── Static brand assets ── */
 app.use('/brand', express.static(path.join(__dirname, 'public', 'brand'), { maxAge: '7d' }));
 
-app.use(routes);
+/* ── API ── */
+app.use('/api/v1/weather', weatherRoutes);
+app.use('/api', routes);
+
+/* ── Client (production build) ── */
+if (HAS_CLIENT_BUILD) {
+  app.use(express.static(CLIENT_DIST, { maxAge: '1h', index: false }));
+
+  const SPA_APP_ROUTES = new Set([
+    '/app/dashboard',
+    '/app/api-keys',
+    '/app/billing',
+    '/app/profile',
+    '/app/docs',
+  ]);
+
+  app.get('*', (req, res, next) => {
+    if (
+      req.path.startsWith('/api') ||
+      req.path.startsWith('/brand') ||
+      req.path.startsWith('/socket.io')
+    ) {
+      return next();
+    }
+
+    if (req.path.startsWith('/app') && !SPA_APP_ROUTES.has(req.path)) {
+      return next();
+    }
+
+    res.sendFile(CLIENT_INDEX);
+  });
+}
 
 app.use(notFound);
 app.use(errorHandler);
@@ -87,7 +142,9 @@ function printStatus() {
     `  ${pad('Cloudinary')} ${env.CLOUDINARY_CLOUD_NAME ? ok('configured') : off('off')}`,
     `  ${pad('Keep-alive')} ${env.KEEP_ALIVE_ENABLED ? ok('every 10m') : off('off')}`,
     `  ${pad('Rate-limit')} ${env.REDIS_ENABLED ? ok(`${env.RATE_LIMIT_PER_IP_PER_MINUTE}/min per IP`) : off('off')}`,
-    `  ${pad('Routes')} /public · /admin · /app · /v1`,
+    `  ${pad('Weather API')} /api/v1/weather/current · /api/v1/weather/forecast`,
+    `  ${pad('Platform API')} /api/public · /api/admin · /api/app`,
+    `  ${pad('Client')} ${HAS_CLIENT_BUILD ? ok('serving client/dist') : warn('no build (run npm run build)')}`,
     '',
   ];
 

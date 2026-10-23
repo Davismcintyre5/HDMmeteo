@@ -4,7 +4,7 @@ const Plan = require('../../models/admin/Plan');
 const Admin = require('../../models/admin/Admin');
 const Verification = require('../../models/client/Verification');
 const RefreshToken = require('../../models/client/RefreshToken');
-const { generateToken, generateRefreshToken, verify } = require('../../utils/jwt');
+const { generateToken, verify } = require('../../utils/jwt');
 const { sha256, randomToken } = require('../../utils/hash');
 const { successResponse, errorResponse } = require('../../utils/response');
 const asyncHandler = require('../../utils/asyncHandler');
@@ -19,7 +19,7 @@ function slugify(name) {
 }
 
 async function issueTokens(user) {
-  const accessToken = generateToken(user._id, user.role, 'user');
+  const accessToken = generateToken(user._id, user.role, 'user', user.tenantId);
   const raw = randomToken(48);
   await RefreshToken.create({
     userId: user._id,
@@ -100,7 +100,6 @@ const register = asyncHandler(async (req, res) => {
 
   const paymentLink = `${env.CLIENT_URL}/invoice/${invoice.invoiceNumber}`;
 
-  // ── 1. Email the client ──
   emailService
     .sendRegistrationReceived({
       tenantId: tenant._id,
@@ -117,10 +116,8 @@ const register = asyncHandler(async (req, res) => {
     })
     .catch((err) => logger.warn({ err: err.message }, 'registration email failed'));
 
-  // ── 2. Email all active admins ──
   notifyAdminsPending({ tenant, owner: user }).catch(() => {});
 
-  // ── 3. SMS the client ──
   if (phone) {
     smsService
       .sendRegistrationReceived({
@@ -170,7 +167,10 @@ const login = asyncHandler(async (req, res) => {
   await user.save();
 
   const tokens = await issueTokens(user);
-  const tenant = await Tenant.findById(user.tenantId).select('name slug status subscriptionStatus').lean();
+
+  const tenant = await Tenant.findById(user.tenantId)
+    .select('name slug status planCode billingInterval subscriptionStatus currentPeriodStart currentPeriodEnd')
+    .lean();
 
   return successResponse(
     res,
@@ -180,6 +180,7 @@ const login = asyncHandler(async (req, res) => {
         id: String(user._id),
         email: user.email,
         fullName: user.fullName,
+        phone: user.phone,
         role: user.role,
         tenantId: String(user.tenantId),
       },
@@ -189,7 +190,11 @@ const login = asyncHandler(async (req, res) => {
             name: tenant.name,
             slug: tenant.slug,
             status: tenant.status,
+            planCode: tenant.planCode,
+            billingInterval: tenant.billingInterval,
             subscriptionStatus: tenant.subscriptionStatus,
+            currentPeriodStart: tenant.currentPeriodStart,
+            currentPeriodEnd: tenant.currentPeriodEnd,
           }
         : null,
     },

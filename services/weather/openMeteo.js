@@ -5,7 +5,12 @@ const BASE = 'https://api.open-meteo.com/v1/forecast';
 
 async function current(lat, lon) {
   const { data } = await axios.get(BASE, {
-    params: { latitude: lat, longitude: lon, current_weather: true, timezone: 'auto' },
+    params: {
+      latitude: lat,
+      longitude: lon,
+      current: 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure',
+      timezone: 'auto',
+    },
     timeout: 10_000,
   });
   return data;
@@ -26,19 +31,19 @@ async function forecast(lat, lon, days = 7) {
 }
 
 function normalizeCurrent(raw) {
-  const cw = raw.current_weather || {};
+  const c = raw.current || {};
   return {
     location: { lat: raw.latitude, lon: raw.longitude, name: null },
     current: {
-      temp: cw.temperature,
-      feelsLike: null,
-      condition: codeToText(cw.weathercode),
-      humidity: null,
-      wind: { speed: cw.windspeed, dir: cw.winddirection },
-      pressure: null,
+      temp: c.temperature_2m,
+      feelsLike: c.apparent_temperature,
+      condition: codeToText(c.weather_code),
+      humidity: c.relative_humidity_2m,
+      wind: { speed: c.wind_speed_10m, dir: c.wind_direction_10m },
+      pressure: c.surface_pressure,
       provider: 'open_meteo',
     },
-    observedAt: cw.time || new Date().toISOString(),
+    observedAt: c.time || new Date().toISOString(),
   };
 }
 

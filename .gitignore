@@ -1,5 +1,6 @@
 # ── Dependencies ────────────────────────────────────────────
 node_modules/
+client/node_modules/
 jspm_packages/
 .pnp
 .pnp.js
@@ -8,15 +9,20 @@ jspm_packages/
 .env
 .env.*
 !.env.example
+client/.env
+client/.env.*
+!client/.env.example
 *.pem
 *.key
+*.p12
 
 # ── Build output ────────────────────────────────────────────
 dist/
 build/
 out/
-.next/
-.nuxt/
+client/dist/
+client/.vite/
+.vite/
 
 # ── Logs ────────────────────────────────────────────────────
 logs/
@@ -25,17 +31,23 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-lerna-debug.log*
+pino.log*
 
-# ── Backups (local scheduler output) ────────────────────────
+# ── Backups ─────────────────────────────────────────────────
 backups/
 *.dump
 *.bson
 *.gz
 *.zip
+!*.svg
 
 # ── OS & editors ────────────────────────────────────────────
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 desktop.ini
 .idea/
@@ -51,6 +63,7 @@ desktop.ini
 .npm/
 .yarn/
 .pnpm-store/
+.nodemonignore
 
 # ── Coverage & tests ────────────────────────────────────────
 coverage/
@@ -62,3 +75,5 @@ tmp/
 temp/
 .tmp/
 *.pid
+*.seed
+*.pid.lock
