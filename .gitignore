@@ -16,14 +16,6 @@ client/.env.*
 *.key
 *.p12
 
-# ── Build output ────────────────────────────────────────────
-dist/
-build/
-out/
-client/dist/
-client/.vite/
-.vite/
-
 # ── Logs ────────────────────────────────────────────────────
 logs/
 *.log
@@ -39,7 +31,6 @@ backups/
 *.bson
 *.gz
 *.zip
-!*.svg
 
 # ── OS & editors ────────────────────────────────────────────
 .DS_Store
@@ -64,6 +55,8 @@ desktop.ini
 .yarn/
 .pnpm-store/
 .nodemonignore
+client/.vite/
+.vite/
 
 # ── Coverage & tests ────────────────────────────────────────
 coverage/
